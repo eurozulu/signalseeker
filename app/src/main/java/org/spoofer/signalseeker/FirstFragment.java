@@ -112,7 +112,7 @@ public class FirstFragment extends Fragment implements LocationService.LocationS
             txtCellInfo.setText("waiting for location...");
             return;
         }
-        
+
         Cell cell = localCells.get(selected);
         txtCellInfo.setText(String.format("%s (%s)  Distance: %d km", cell.getCellID(), cell.getMobileNetworkCode(), cell.getDistance()));
     }
