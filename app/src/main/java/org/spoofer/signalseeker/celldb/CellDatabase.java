@@ -1,26 +1,20 @@
 package org.spoofer.signalseeker.celldb;
 
 import android.content.ContentValues;
-import android.content.Context;
 import android.database.Cursor;
+import android.database.DatabaseUtils;
 import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
-import android.location.Location;
 import android.util.Log;
-
-import androidx.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
 
-// CellDatabase pre calculates the sine and cosign of the cell geo-coords and stores them in a seperate database.
+// CellDatabase pre calculates the sine and cosign of the cell geo-coords and stores them in a seperate table.
 // sqlite doesn't support trig functions so values are pre-calculated and looked up to calculate distance.
-// This database attaches the Cells database to it to present two tables:
-// main.calculated and celldb.cell_zone
-public class CellDatabase extends SQLiteOpenHelper {
+public class CellDatabase {
 
-    private static final String TABLE_CALC = "calculated";
     private static final String TABLE_CELLS = "cell_zone";
+    private static final String TABLE_CALC = "calculated";
 
     // Columns in the calculated table to hold results
     private static final String COL_ID = "_id";
@@ -36,8 +30,8 @@ public class CellDatabase extends SQLiteOpenHelper {
             "_id", "latitude", "longitude"
     };
 
-    private static final String DROP_CALC_TABLE = "DROP TABLE IF EXISTS main." + TABLE_CALC;
-    private static final String CREATE_CALC_TABLE = "CREATE TABLE main." + TABLE_CALC +
+    private static final String DROP_CALC_TABLE = "DROP TABLE IF EXISTS " + TABLE_CALC;
+    private static final String CREATE_CALC_TABLE = "CREATE TABLE IF NOT EXISTS " + TABLE_CALC +
             "(" +
             COL_ID + " INTEGER PRIMARY KEY," + // Define a primary key
             COL_CELL_ID + " INTEGER UNIQUE," +
@@ -46,7 +40,7 @@ public class CellDatabase extends SQLiteOpenHelper {
             COL_LONGITUDE_SIN + " NUMERIC," +
             COL_LONGITUDE_COS + " NUMERIC" +
             ")";
-    private static final String CREATE_INDEX = "CREATE UNIQUE INDEX i1 ON " + TABLE_CALC + "(" + COL_ID + ", " + COL_CELL_ID + ");";
+    private static final String CREATE_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS i1 ON " + TABLE_CALC + "(" + COL_ID + ", " + COL_CELL_ID + ");";
 
     // params sin_lat_rad, cos_lat_rad, sin_lon_rad, cos_lon_rad
     private static String SELECT_CELLS = "SELECT " + COL_ID + "," + COL_CELL_ID + "," +
@@ -54,38 +48,21 @@ public class CellDatabase extends SQLiteOpenHelper {
             "(" + COL_LONGITUDE_SIN + " * %f + " + COL_LONGITUDE_COS + " * %f)) AS " + COL_DISTANCE +
             " FROM " + TABLE_CALC +
             " ORDER BY " + COL_DISTANCE + " DESC" +
-            "LIMIT 25";
+            " LIMIT 25";
+
 
     private final String dbpath;
-    private final String attachedDBName = "cellsdb"; // can be anything EXCEPT 'main'
 
-    public CellDatabase(@Nullable Context context, @Nullable String celldbpath, int version) {
-        super(context, getDbname(celldbpath), null, version);
+    private static final Object lock = new Object();
+    private SQLiteDatabase db;
+
+    public CellDatabase(String celldbpath) {
+        super();
         this.dbpath = celldbpath;
+
     }
 
-    @Override
-    public void onCreate(SQLiteDatabase db) {
-        db.execSQL("ATTACH DATABASE '" + dbpath + "' AS " + attachedDBName);
-        db.execSQL(CREATE_CALC_TABLE);
-        db.execSQL(CREATE_INDEX);
-
-        try {
-            populateCalcTable(db);
-        } catch (Exception e) {
-            e.printStackTrace();
-            Log.e(CellDatabase.class.getSimpleName(), "Failed to populate calc table", e);
-        }
-    }
-
-    @Override
-    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        db.execSQL(DROP_CALC_TABLE);
-        onCreate(db);
-    }
-
-
-    public List<Cell> findLocalCells(Location location) {
+    public List<Cell> findLocalCells(double latitude, double longitude) {
         /*
         https://github.com/sozialhelden/wheelmap-android/wiki/Sqlite,-Distance-calculations
         SELECT "location",
@@ -96,10 +73,10 @@ public class CellDatabase extends SQLiteOpenHelper {
         LIMIT 10;
         */
         // params sin_lat_rad, cos_lat_rad, sin_lon_rad, cos_lon_rad
-        double sinLatRad = Math.toRadians(Math.sin(location.getLatitude()));
-        double cosLatRad = Math.toRadians(Math.cos(location.getLatitude()));
-        double sinLonRad = Math.toRadians(Math.sin(location.getLongitude()));
-        double cosLonRad = Math.toRadians(Math.cos(location.getLongitude()));
+        double sinLatRad = Math.toRadians(Math.sin(latitude));
+        double cosLatRad = Math.toRadians(Math.cos(latitude));
+        double sinLonRad = Math.toRadians(Math.sin(longitude));
+        double cosLonRad = Math.toRadians(Math.cos(longitude));
 
         String sql = String.format(SELECT_CELLS, sinLatRad, cosLatRad, sinLonRad, cosLonRad);
         Cursor cur = getReadableDatabase().rawQuery(sql, null);
@@ -113,6 +90,35 @@ public class CellDatabase extends SQLiteOpenHelper {
         return cells;
     }
 
+    public void close() {
+        synchronized (lock) {
+            if (db != null) {
+                db.close();
+                db = null;
+            }
+        }
+    }
+
+    private SQLiteDatabase getReadableDatabase() {
+        synchronized (lock) {
+            if (db != null)
+                return db;
+        }
+
+        SQLiteDatabase db = SQLiteDatabase.openDatabase(dbpath, null, SQLiteDatabase.OPEN_READWRITE);
+        db.execSQL(CREATE_CALC_TABLE);
+        if (DatabaseUtils.queryNumEntries(db, TABLE_CALC) == 0) {
+            try {
+                populateCalcTable(db);
+            } catch (Exception e) {
+                e.printStackTrace();
+                Log.e(CellDatabase.class.getSimpleName(), "Failed to populate calc table", e);
+            }
+        }
+        return db;
+    }
+
+
     private Cell readCursorCell(Cursor cur) {
         String cellId = cur.getString(cur.getColumnIndex(COL_CELL_ID));
         long distance = cur.getLong(cur.getColumnIndex(COL_DISTANCE));
@@ -120,33 +126,15 @@ public class CellDatabase extends SQLiteOpenHelper {
                 0, 0, distance, null);
     }
 
-    private static String getDbname(String dbpath) {
-        String name = trimEndSlash(dbpath);
-        int i = name.lastIndexOf('/');
-        if (i < 0) {
-            return dbpath;
-        }
-        name = name.substring(i);
+    public void populateCalcTable(SQLiteDatabase db) throws IllegalStateException {
+        db.execSQL(CREATE_INDEX);
 
-        i = name.lastIndexOf('.');
-        if (i >= 0)
-            name = name.substring(0, i);
-
-        return name;
-    }
-
-    private static String trimEndSlash(String s) {
-        while (s.length() > 0 && s.charAt(s.length() - 1) == '/') {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s;
-    }
-
-    private void populateCalcTable(SQLiteDatabase db) throws Exception {
-        Cursor cur = db.query(attachedDBName + "." + TABLE_CELLS, CELL_COLS,
-                null, null, null, null, "_id", null);
+        Cursor cur = db.query(TABLE_CELLS, CELL_COLS,
+                null, null,
+                null, null,
+                "_id", null);
         if (cur == null)
-            throw new IllegalStateException("Failed to query attached database");
+            throw new IllegalStateException("Failed to query cells database");
 
         db.beginTransaction();
         try {
@@ -163,6 +151,7 @@ public class CellDatabase extends SQLiteOpenHelper {
                 values.put(COL_LONGITUDE_COS, Math.toRadians(Math.cos(longitude)));
                 db.insert(TABLE_CALC, null, values);
             }
+            db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
             cur.close();

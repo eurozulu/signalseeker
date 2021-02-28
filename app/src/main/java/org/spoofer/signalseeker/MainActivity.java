@@ -12,7 +12,6 @@ import android.os.IBinder;
 import android.provider.Settings;
 import android.view.Menu;
 import android.view.MenuItem;
-import android.view.View;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -22,15 +21,12 @@ import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
 
-import com.google.android.material.floatingactionbutton.FloatingActionButton;
-import com.google.android.material.snackbar.Snackbar;
-
-import org.spoofer.signalseeker.location.LocationService;
+import org.spoofer.signalseeker.location.CellLocationService;
 
 public class MainActivity extends AppCompatActivity {
     private final Object lock = new Object();
-    private LocationService locationSvc;
-    private LocationService.LocationServiceListener currentListener;
+    private CellLocationService locationSvc;
+    private CellLocationService.CellLocationListener currentListener;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -39,14 +35,6 @@ public class MainActivity extends AppCompatActivity {
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
 
-        FloatingActionButton fab = findViewById(R.id.fab);
-        fab.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG)
-                        .setAction("Action", null).show();
-            }
-        });
         boolean hasPermiss = (ActivityCompat.checkSelfPermission(this,
                 Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
                 ActivityCompat.checkSelfPermission(this,
@@ -59,6 +47,8 @@ public class MainActivity extends AppCompatActivity {
             checkLocationEnabled();
             bindToLocationService();
         }
+
+        // Monitor fragment switches to wire up supporting fragments to cellservice
         getSupportFragmentManager().registerFragmentLifecycleCallbacks(fragLifecycleCallbacks, true);
 
     }
@@ -99,19 +89,14 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(getApplicationContext(), "No permission to continue. exiting", Toast.LENGTH_LONG).show();
                 finish();
             }
+            checkLocationEnabled();
+            bindToLocationService();
         }
-        checkLocationEnabled();
-        bindToLocationService();
     }
 
-
-    @Override
-    protected void onStart() {
-        super.onStart();
-    }
 
     private void bindToLocationService() {
-        Intent intent = new Intent(getApplicationContext(), LocationService.class);
+        Intent intent = new Intent(getApplicationContext(), CellLocationService.class);
         if (bindService(intent, connection, Context.BIND_AUTO_CREATE)) {
             Toast.makeText(getApplicationContext(), "Failed to connect to loction service!", Toast.LENGTH_LONG).show();
         }
@@ -136,7 +121,7 @@ public class MainActivity extends AppCompatActivity {
     private ServiceConnection connection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
-            connectToService(((LocationService.LocalBinder) service).getService(), currentListener);
+            connectToService(((CellLocationService.LocalBinder) service).getService(), currentListener);
         }
 
         @Override
@@ -152,23 +137,23 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 public void onFragmentStarted(@NonNull FragmentManager fm, @NonNull Fragment f) {
                     super.onFragmentStarted(fm, f);
-                    if (!(f instanceof LocationService.LocationServiceListener)) {
+                    if (!(f instanceof CellLocationService.CellLocationListener)) {
                         return;
                     }
-                    connectToService(null, (LocationService.LocationServiceListener) f);
+                    connectToService(null, (CellLocationService.CellLocationListener) f);
                 }
 
                 @Override
                 public void onFragmentStopped(@NonNull FragmentManager fm, @NonNull Fragment f) {
                     super.onFragmentStopped(fm, f);
-                    if (!(f instanceof LocationService.LocationServiceListener)) {
+                    if (!(f instanceof CellLocationService.CellLocationListener)) {
                         return;
                     }
-                    disconnectFromService(null, (LocationService.LocationServiceListener) f);
+                    disconnectFromService(null, (CellLocationService.CellLocationListener) f);
                 }
             };
 
-    private void connectToService(LocationService svc, LocationService.LocationServiceListener l) {
+    private void connectToService(CellLocationService svc, CellLocationService.CellLocationListener l) {
         synchronized (lock) {
             if (l != null)
                 currentListener = l;
@@ -176,14 +161,14 @@ public class MainActivity extends AppCompatActivity {
                 locationSvc = svc;
 
             if (locationSvc != null && currentListener != null)
-                locationSvc.addLocationListener(currentListener);
+                locationSvc.addCellLocationListener(currentListener);
         }
     }
 
-    private void disconnectFromService(LocationService svc, LocationService.LocationServiceListener l) {
+    private void disconnectFromService(CellLocationService svc, CellLocationService.CellLocationListener l) {
         synchronized (lock) {
             if (locationSvc != null && l != null)
-                locationSvc.removeLocationListener(l);
+                locationSvc.removeCellLocationListener(l);
 
             if (currentListener == l)
                 currentListener = null;
